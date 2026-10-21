@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<base href="https://mountain-generator.example.com/">
+		<meta charset="UTF-8">
+		<title>
+			カスタムハイトマップジェネレーター
+		</title>
+		<style>
+				body {
+					font-family: Arial, sans-serif;
+					display: flex;
+					flex-direction: column;
+					align-items: center;
+					background-color: #f0f0f0;
+					padding: 20px;
+				}
+				h1 {
+					color: #333;
+					text-align: center;
+				}
+				#canvasContainer {
+					position: relative;
+					display: inline-block;
+					margin-bottom: 20px;
+				}
+				canvas {
+					border: 1px solid #ddd;
+					box-shadow: 0 0 10px rgba(0,0,0,0.1);
+					max-width: 100%;
+					height: auto;
+				}
+				#overlayCanvas {
+					position: absolute;
+					top: 0;
+					left: 0;
+					pointer-events: none;
+				}
+				.controls-columns {
+					display: flex;
+					flex-direction: column;
+					align-items: center;
+					gap: 20px;
+				}
+				.controls-rows{
+					display: flex;
+					gap: 10px;
+					align-items: center;
+				}
+				button, input {
+					font-size: 16px;
+					padding: 10px;
+					border: 1px solid #ddd;
+					border-radius: 5px;
+				}
+				button {
+					background-color: #4CAF50;
+					color: white;
+					border: none;
+					cursor: pointer;
+					transition: background-color 0.3s;
+				}
+				button:hover {
+					background-color: #45a049;
+				}
+				#downloadBtn {
+					background-color: #008CBA;
+				}
+				#downloadBtn:hover {
+					background-color: #007B9A;
+				}
+				input[type="number"] {
+					width: 80px;
+				}
+				input[type="text"] {
+					width: 200px;
+				}
+		</style>
+	</head>
+	<body>
+		<h1>
+			カスタムハイトマップジェネレーター by HayaKoh
+		</h1>
+		<div id="canvasContainer">
+			<canvas id="heightmap"></canvas>
+			<canvas id="overlayCanvas"></canvas>
+		</div>
+		<div class="controls-columns">
+			<div class="controls-rows" id="buttonControls">
+				<button onclick="generateRandomSeed()">ランダム生成</button> <button id=
+				"downloadBtn" onclick="downloadHeightmap()">ダウンロード</button>
+			</div>
+			<div class="controls-rows" id="seedControl">
+				<label for="seedInput">シード値</label> <input type="text" id="seedInput"
+				value="HayaKoh">
+			</div>
+			<div class="controls-rows" id="sizeInputs">
+				<label for="widthInput">横幅 (8 ～ 4096)</label> <input type="number" id=
+				"widthInput" value="256" min="8" max="4096"> <label for=
+				"heightInput">縦幅 (8 ～ 4096)</label> <input type="number" id=
+				"heightInput" value="256" min="8" max="4096">
+			</div>
+			<div class="controls-rows" id="heightControls">
+				<label for="minHeightInput">最低高度 ( -11 ～ 33)</label> <input type=
+				"number" id="minHeightInput" value="-5" min="-11" max="33"> <label for=
+				"maxHeightInput">最高高度 ( -11 ～ 33)</label> <input type="number" id=
+				"maxHeightInput" value="10" min="-11" max="33">
+			</div>
+			<div class="controls-rows" id="blueOverlayControls">
+				<label for="blueThreshold">海面チェッカー ( -11 ～ 33)</label> <input type=
+				"number" id="blueThreshold" value="0" min="-11" max="33">
+			</div>
+		</div>
+		<script>
+			const canvas = document.getElementById('heightmap');
+			const ctx = canvas.getContext('2d');
+			const overlayCanvas = document.getElementById('overlayCanvas');
+			const overlayCtx = overlayCanvas.getContext('2d');
+			const widthInput = document.getElementById('widthInput');
+			const heightInput = document.getElementById('heightInput');
+			const blueThresholdInput = document.getElementById('blueThreshold');
+			const minHeightInput = document.getElementById('minHeightInput');
+			const maxHeightInput = document.getElementById('maxHeightInput');
+			const seedInput = document.getElementById('seedInput');
+
+			let heightmapData;
+
+			function hashCode(str) {
+				let hash = 0;
+				for (let i = 0; i < str.length; i++) {
+				const char = str.charCodeAt(i);
+				hash = ((hash << 5) - hash) + char;
+				hash = hash & hash;
+				}
+				return hash;
+			}
+
+			class SeededRandom {
+				constructor(seed) {
+				this.seed = seed;
+				}
+				random() {
+					const x = Math.sin(this.seed++) * 10000;
+					return x - Math.floor(x);
+				}
+			}
+
+			function generateRandomSeed() {
+				const randomSeed = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+				seedInput.value = randomSeed;
+				generateHeightmap();
+			}
+
+			function heightToRGB(height) {
+				return height * 6 + 64;
+			}
+
+			function RGBToHeight(rgb) {
+				return Math.floor((rgb - 64) / 6);
+			}
+
+			function generateHeightmap() {
+				const width = parseInt(widthInput.value);
+				const height = parseInt(heightInput.value);
+				const minHeight = parseInt(minHeightInput.value);
+				const maxHeight = parseInt(maxHeightInput.value);
+				const seed = hashCode(seedInput.value);
+				const rng = new SeededRandom(seed);
+				canvas.width = width;
+				canvas.height = height;
+				overlayCanvas.width = width;
+				overlayCanvas.height = height;
+				const size = Math.max(width, height) + 1;
+				const max = size - 1;
+				const map = new Float32Array(size * size);
+				map[0] = rng.random();
+				map[max] = rng.random();
+				map[size * max] = rng.random();
+				map[size * max + max] = rng.random();
+				function diamond(x, y, step, offset) {
+					const avg = (map[y - step + (x - step) * size] +
+						map[y - step + (x + step) * size] +
+						map[y + step + (x - step) * size] +
+						map[y + step + (x + step) * size]) * 0.25 + offset;
+						map[y + x * size] = Math.max(Math.min(avg, 1), 0);
+				}
+				function square(x, y, step, offset) {
+					let avg = 0;
+					let count = 0;
+					if (y >= step) { avg += map[y - step + x * size]; count++; }
+					if (y + step < size) { avg += map[y + step + x * size]; count++; }
+					if (x >= step) { avg += map[y + (x - step) * size]; count++; }
+					if (x + step < size) { avg += map[y + (x + step) * size]; count++; }
+					avg = avg / count + offset;
+					map[y + x * size] = Math.max(Math.min(avg, 1), 0);
+				}
+				let step = max;
+				let scale = 1.0;
+				while (step > 1) {
+					const half = step * 0.5;
+					for (let y = half; y < max; y += step) {
+						for (let x = half; x < max; x += step) {
+							diamond(x, y, half, rng.random() * scale * 2 - scale);
+						}
+					}
+					for (let y = 0; y <= max; y += half) {
+						for (let x = (y + half) % step; x <= max; x += step) {
+							square(x, y, half, rng.random() * scale * 2 - scale);
+						}
+					}
+					step *= 0.5;
+					scale *= 0.5;
+				}
+				const imageData = ctx.createImageData(width, height);
+				for (let y = 0; y < height; y++) {
+					for (let x = 0; x < width; x++) {
+						const value = Math.floor(map[y * size + x] * (maxHeight - minHeight) + minHeight);
+						const index = (y * width + x) * 4;
+						const rgbValue = heightToRGB(value);
+						imageData.data[index] = rgbValue;
+						imageData.data[index + 1] = rgbValue;
+						imageData.data[index + 2] = rgbValue;
+						imageData.data[index + 3] = 255;
+					}
+				}
+				ctx.putImageData(imageData, 0, 0);
+				heightmapData = imageData;
+				applyBlueOverlay();
+			}
+
+			function applyBlueOverlay() {
+				const width = canvas.width;
+				const height = canvas.height;
+				const threshold = heightToRGB(parseInt(blueThresholdInput.value));
+				overlayCtx.clearRect(0, 0, width, height);
+				const overlayData = overlayCtx.createImageData(width, height);
+				for (let y = 0; y < height; y++) {
+					for (let x = 0; x < width; x++) {
+						const index = (y * width + x) * 4;
+						const value = heightmapData.data[index];
+						if (value <= threshold) {
+							overlayData.data[index] = 0;
+							overlayData.data[index + 1] = 0;
+							overlayData.data[index + 2] = 255;
+							overlayData.data[index + 3] = 64;
+						}
+					}
+				}
+				overlayCtx.putImageData(overlayData, 0, 0);
+			}
+
+			function downloadHeightmap() {
+				const dataURL = canvas.toDataURL('image/png');
+				const link = document.createElement('a');
+				const seedValue = seedInput.value.replace(/[^a-zA-Z0-9]/g, '_');
+				link.download = `HayaKoh-height_${seedValue}.png`;
+				link.href = dataURL;
+				link.target = '_blank';
+				document.body.appendChild(link);
+				link.click();
+				document.body.removeChild(link);
+			}
+
+			function validateInput(input, min, max) {
+				let value = parseInt(input.value);
+				if (isNaN(value) || value < min) {
+					value = min;
+				} else if (value > max) {
+					value = max;
+				}
+				input.value = value;
+				return value;
+			}
+
+			function validateHeightInputs() {
+				let minHeight = validateInput(minHeightInput, -11, 33);
+				let maxHeight = validateInput(maxHeightInput, -11, 33);
+				if (minHeight > maxHeight) {
+					maxHeight = Math.min(minHeight + 1, 33);
+					maxHeightInput.value = maxHeight;
+				}
+			}
+
+			widthInput.addEventListener('change', function() {
+				validateInput(this, 8, 4096);
+				generateHeightmap();
+			});
+
+			heightInput.addEventListener('change', function() {
+				validateInput(this, 8, 4096);
+				generateHeightmap();
+			});
+
+			blueThresholdInput.addEventListener('change', function() {
+				validateInput(this, -11, 33);
+				applyBlueOverlay();
+			});
+
+			minHeightInput.addEventListener('change', function() {
+				validateHeightInputs();
+				generateHeightmap();
+			});
+
+			maxHeightInput.addEventListener('change', function() {
+				validateHeightInputs();
+				generateHeightmap();
+			});
+
+			seedInput.addEventListener('change', function() {
+				generateHeightmap();
+			});
+
+			generateHeightmap();
+		</script>
+	</body>
+</html>
